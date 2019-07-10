@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+# unofficial "strict mode": http://redsymbol.net/articles/unofficial-bash-strict-mode/
+set -euo pipefail
+IFS=$'\n\t'
+
+
+BUILD_DIR="/tmp/algo-book-build"
+SITE_ROOT=${SITE_ROOT-"/"}
+REPO="github.com/Bradfield/algos.git"
+PORT=${PORT-"5000"}
+
+
+function test {
+  log-msg 'Running Python tests of code samples'
+  python -m unittest discover -p "*_test.py"
+  log-msg 'Running JavaScript code samples to check for failing asserts'
+  for file in book/**/*.js; do
+    { echo 'var assert = require("assert");'; cat $file; } | node --use_strict
+  done
+  log-msg 'Running JavaScript tests of book building code'
+  for file in *.js; do
+    TEST=1 node $file
+  done
+}
+
+
+function publish-from-travis {
+  if [ "$TRAVIS_PULL_REQUEST" == "false" ] && [ "$TRAVIS_BRANCH" == "master" ]; then
+    build-book && publish-book
+  fi
+}
+
+function serve {
+  mkdir -p $BUILD_DIR
+  cd $BUILD_DIR && http-server -p $PORT
+}
+
+# run in dev mode
+function dev {
+  log-msg 'Building'
+  build-book
+  log-msg 'Starting server and browser'
+  ( serve ) &
+  ( sleep 0.5 && open -a "Google Chrome" "http://localhost:${PORT}" ) &
+  log-msg 'Watching for changes'
+  wach './run build-book && rld chrome'
+  wait
+}
+
+# build book to a temporary direcotry
+function build-book {
+  log-msg "Clearing contents of ${BUILD_DIR}"
+  mkdir -p $BUILD_DIR
+  rm -rf $BUILD_DIR/**/*
+  log-msg "Building book"
+  BUILD_DESTINATION=$BUILD_DIR SITE_ROOT=$SITE_ROOT node build.js
+}
+
+# publish a built book by commiting and force pushing it to gh-pages
+function publish-book {
+  cd $BUILD_DIR
+  git init
+  git config user.name "Travis CI"
+  git config user.email "travis@travis-ci.org"
+  git add .
+  git commit -m "Deploying to Github Pages" > /dev/null
+  log-msg "Publishing to github pages"
+  git push --force --quiet "https://${GITHUB_TOKEN}@${REPO}" master:gh-pages > /dev/null
+}
+
+# ---
+
+# print a prefixed log message
+function log-msg {
+  echo '-*' "$1"
+}
+
+# ---
+
+# add executables for local node modules to path
+function realpath {
+  python -c 'import os,sys; print os.path.realpath(sys.argv[1])' "$1"
+}
+PATH=$(realpath "$(dirname "$BASH_SOURCE")")/node_modules/.bin:$PATH
+
+# ---
+
+# if called with interpreter, run fn that matches first arg
+[[ $BASH_SOURCE = "$0" ]] && {
+  # show help if no sub-command provided
+  [[ $# -eq 0 ]] && { help; exit; }
+  # otherwise invoke the fun
+  eval "$1" "${@:2}"
+}
